@@ -1,0 +1,102 @@
+steps:
+  # 1. Install .NET SDK
+  - name: 'mcr.microsoft.com/dotnet/sdk:8.0'
+    id: 'Build and Publish App'
+    dir: 'src'
+    entrypoint: 'bash'
+    args:
+      - -c
+      - |
+        dotnet restore
+        dotnet publish -c Release -o ../dist
+
+  # 2. Retrieve GCP Secrets and write them to JSON config files
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    id: 'Fetch Secrets'
+    entrypoint: 'bash'
+    args:
+      - -c
+      - |
+        apt-get update && apt-get install jq -y
+        mkdir -p dist/config
+
+        gcloud secrets versions access latest --secret=PROD_COMMON_CONFIG \
+          > dist/config/appsettings.default.readonly.json
+
+        gcloud secrets versions access latest --secret=PROD_NUDGEENGINE_CONFIG \
+          > dist/config/appsettings.json
+
+  # 3. Copy dist folder to VM using gcloud SSH
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    id: 'Copy Build to VM'
+    entrypoint: 'bash'
+    args:
+      - -c
+      - |
+        gcloud compute scp --recurse dist \
+          nudge-vm:/home/ubuntu/nudgeengine-tmp \
+          --zone=us-central1-a
+
+  # 4. Run stop.sh on VM via SSH
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    id: 'Stop Service on VM'
+    entrypoint: 'bash'
+    args:
+      - -c
+      - |
+        gcloud compute ssh nudge-vm --zone=us-central1-a --command "sudo systemctl stop kestrel-shark-prod-nudgeengine || true"
+
+  # 5. Copy new files into app folder, backup old ones
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    id: 'Deploy App to VM'
+    entrypoint: 'bash'
+    args:
+      - -c
+      - |
+        gcloud compute ssh nudge-vm --zone=us-central1-a --command "
+          set -e
+          cd /home/ubuntu
+          mkdir -p Middleware/shark-prod-nudgeengine-backup
+          cp -r Middleware/shark-prod-nudgeengine/* Middleware/shark-prod-nudgeengine-backup || true
+          cp -r nudgeengine-tmp/* Middleware/shark-prod-nudgeengine/
+          sudo chown -R ubuntu:ubuntu Middleware/shark-prod-nudgeengine/
+          sudo chmod -R 744 Middleware/shark-prod-nudgeengine/*.dll
+        "
+
+  # 6. Start the service
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    id: 'Start Service on VM'
+    entrypoint: 'bash'
+    args:
+      - -c
+      - |
+        gcloud compute ssh nudge-vm --zone=us-central1-a --command "sudo systemctl start kestrel-shark-prod-nudgeengine"
+
+  # 7. Validate service status
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    id: 'Validate Service'
+    entrypoint: 'bash'
+    args:
+      - -c
+      - |
+        gcloud compute ssh nudge-vm --zone=us-central1-a --command "
+          sleep 10
+          if systemctl is-active --quiet kestrel-shark-prod-nudgeengine; then
+            echo '✅ Deployment successful'
+            rm -rf /home/ubuntu/nudgeengine-tmp
+            rm -rf /home/ubuntu/Middleware/shark-prod-nudgeengine-backup
+          else
+            echo '❌ Deployment failed. Reverting...'
+            cp -r /home/ubuntu/Middleware/shark-prod-nudgeengine-backup/* /home/ubuntu/Middleware/shark-prod-nudgeengine/
+            sudo systemctl restart kestrel-shark-prod-nudgeengine
+            exit 1
+          fi
+        "
+
+artifacts:
+  files:
+    - dist/**/*
+    - scripts/*
+options:
+  logging: CLOUD_LOGGING_ONLY
+    
