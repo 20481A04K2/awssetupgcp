@@ -1,5 +1,5 @@
 steps:
-  # 1. Install .NET SDK
+  # 1. Install .NET SDK, build and publish the app
   - name: 'mcr.microsoft.com/dotnet/sdk:8.0'
     id: 'Build and Publish App'
     dir: 'src'
@@ -26,7 +26,7 @@ steps:
         gcloud secrets versions access latest --secret=PROD_NUDGEENGINE_CONFIG \
           > dist/config/appsettings.json
 
-  # 3. Copy dist folder to VM using gcloud SSH
+  # 3. Copy dist folder to VM using gcloud SCP
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     id: 'Copy Build to VM'
     entrypoint: 'bash'
@@ -34,26 +34,26 @@ steps:
       - -c
       - |
         gcloud compute scp --recurse dist \
-          nudge-vm:/home/ubuntu/nudgeengine-tmp \
+          nudgeengine-prod-vm:/home/ubuntu/nudgeengine-tmp \
           --zone=us-central1-a
 
-  # 4. Run stop.sh on VM via SSH
+  # 4. Stop the existing service on VM
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     id: 'Stop Service on VM'
     entrypoint: 'bash'
     args:
       - -c
       - |
-        gcloud compute ssh nudge-vm --zone=us-central1-a --command "sudo systemctl stop kestrel-shark-prod-nudgeengine || true"
+        gcloud compute ssh nudgeengine-prod-vm --zone=us-central1-a --command "sudo systemctl stop kestrel-shark-prod-nudgeengine || true"
 
-  # 5. Copy new files into app folder, backup old ones
+  # 5. Backup old app and copy new files to app folder on VM
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     id: 'Deploy App to VM'
     entrypoint: 'bash'
     args:
       - -c
       - |
-        gcloud compute ssh nudge-vm --zone=us-central1-a --command "
+        gcloud compute ssh nudgeengine-prod-vm --zone=us-central1-a --command "
           set -e
           cd /home/ubuntu
           mkdir -p Middleware/shark-prod-nudgeengine-backup
@@ -63,23 +63,23 @@ steps:
           sudo chmod -R 744 Middleware/shark-prod-nudgeengine/*.dll
         "
 
-  # 6. Start the service
+  # 6. Start the service on VM
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     id: 'Start Service on VM'
     entrypoint: 'bash'
     args:
       - -c
       - |
-        gcloud compute ssh nudge-vm --zone=us-central1-a --command "sudo systemctl start kestrel-shark-prod-nudgeengine"
+        gcloud compute ssh nudgeengine-prod-vm --zone=us-central1-a --command "sudo systemctl start kestrel-shark-prod-nudgeengine"
 
-  # 7. Validate service status
+  # 7. Validate service status and cleanup or rollback
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     id: 'Validate Service'
     entrypoint: 'bash'
     args:
       - -c
       - |
-        gcloud compute ssh nudge-vm --zone=us-central1-a --command "
+        gcloud compute ssh nudgeengine-prod-vm --zone=us-central1-a --command "
           sleep 10
           if systemctl is-active --quiet kestrel-shark-prod-nudgeengine; then
             echo '✅ Deployment successful'
@@ -97,6 +97,6 @@ artifacts:
   files:
     - dist/**/*
     - scripts/*
+
 options:
   logging: CLOUD_LOGGING_ONLY
-    
