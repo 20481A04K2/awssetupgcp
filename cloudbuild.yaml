@@ -1,5 +1,5 @@
 steps:
-  # 1. Install .NET SDK, build and publish the app
+  # 1. Install .NET SDK, build and publish app
   - name: 'mcr.microsoft.com/dotnet/sdk:8.0'
     id: 'Build and Publish App'
     dir: 'src'
@@ -21,12 +21,12 @@ steps:
         mkdir -p dist/config
 
         gcloud secrets versions access latest --secret=PROD_COMMON_CONFIG \
-          > dist/config/appsettings.default.readonly.json
+          --project=onyx-antler-459216-j6 > dist/config/appsettings.default.readonly.json
 
         gcloud secrets versions access latest --secret=PROD_NUDGEENGINE_CONFIG \
-          > dist/config/appsettings.json
+          --project=onyx-antler-459216-j6 > dist/config/appsettings.json
 
-  # 3. Copy dist folder to VM using gcloud SCP
+  # 3. Copy dist folder to VM using gcloud SSH
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     id: 'Copy Build to VM'
     entrypoint: 'bash'
@@ -35,7 +35,7 @@ steps:
       - |
         gcloud compute scp --recurse dist \
           nudgeengine-prod-vm:/home/ubuntu/nudgeengine-tmp \
-          --zone=us-central1-a
+          --zone=us-central1-a --project=onyx-antler-459216-j6
 
   # 4. Stop the existing service on VM
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
@@ -44,16 +44,16 @@ steps:
     args:
       - -c
       - |
-        gcloud compute ssh nudgeengine-prod-vm --zone=us-central1-a --command "sudo systemctl stop kestrel-shark-prod-nudgeengine || true"
+        gcloud compute ssh nudgeengine-prod-vm --zone=us-central1-a --project=onyx-antler-459216-j6 --command "sudo systemctl stop kestrel-shark-prod-nudgeengine || true"
 
-  # 5. Backup old app and copy new files to app folder on VM
+  # 5. Backup old app and copy new files into app folder
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     id: 'Deploy App to VM'
     entrypoint: 'bash'
     args:
       - -c
       - |
-        gcloud compute ssh nudgeengine-prod-vm --zone=us-central1-a --command "
+        gcloud compute ssh nudgeengine-prod-vm --zone=us-central1-a --project=onyx-antler-459216-j6 --command "
           set -e
           cd /home/ubuntu
           mkdir -p Middleware/shark-prod-nudgeengine-backup
@@ -70,16 +70,16 @@ steps:
     args:
       - -c
       - |
-        gcloud compute ssh nudgeengine-prod-vm --zone=us-central1-a --command "sudo systemctl start kestrel-shark-prod-nudgeengine"
+        gcloud compute ssh nudgeengine-prod-vm --zone=us-central1-a --project=onyx-antler-459216-j6 --command "sudo systemctl start kestrel-shark-prod-nudgeengine"
 
-  # 7. Validate service status and cleanup or rollback
+  # 7. Validate service status and cleanup
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     id: 'Validate Service'
     entrypoint: 'bash'
     args:
       - -c
       - |
-        gcloud compute ssh nudgeengine-prod-vm --zone=us-central1-a --command "
+        gcloud compute ssh nudgeengine-prod-vm --zone=us-central1-a --project=onyx-antler-459216-j6 --command "
           sleep 10
           if systemctl is-active --quiet kestrel-shark-prod-nudgeengine; then
             echo '✅ Deployment successful'
@@ -92,11 +92,6 @@ steps:
             exit 1
           fi
         "
-
-artifacts:
-  files:
-    - dist/**/*
-    - scripts/*
 
 options:
   logging: CLOUD_LOGGING_ONLY
